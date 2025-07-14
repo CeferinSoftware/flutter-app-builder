@@ -1,0 +1,197 @@
+version: 2.1
+
+orbs:
+  flutter: circleci/flutter@2.1.0
+
+jobs:
+  build_android:
+    docker:
+      - image: cimg/android:2024.01
+    resource_class: large
+    environment:
+      - GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.workers.max=2"
+    steps:
+      - checkout
+      
+      # Instalar Flutter y dependencias
+      - flutter/install_sdk:
+          version: 3.29.2
+      - flutter/install_android_gradle:
+          version: 8.6
+          
+      # Configurar Android SDK 35
+      - run:
+          name: Install Android SDK 35
+          command: |
+            yes | sdkmanager --licenses
+            yes | sdkmanager "platforms;android-35" "build-tools;35.0.0"
+            
+      # Configurar keystore si está disponible
+      - run:
+          name: Setup Android Signing
+          command: |
+            if [ -n "$KEYSTORE_BASE64" ]; then
+              echo "🔐 Configurando firma Android..."
+              echo $KEYSTORE_BASE64 | base64 -d > android/app/upload-keystore.jks
+              
+              # Crear key.properties
+              cat > android/key.properties << EOF
+            storePassword=$KEYSTORE_PASSWORD
+            keyPassword=$KEY_PASSWORD
+            keyAlias=$KEY_ALIAS
+            storeFile=upload-keystore.jks
+            EOF
+              
+              echo "✅ Keystore configurado"
+            else
+              echo "⚠️ No se encontró keystore - compilación sin firma"
+            fi
+            
+      # Cache de Gradle
+      - restore_cache:
+          keys:
+            - gradle-v2-{{ checksum "android/build.gradle" }}-{{ checksum "android/app/build.gradle" }}
+            - gradle-v2-
+            
+      # Obtener dependencias
+      - run:
+          name: Get Dependencies
+          command: flutter pub get
+          
+      # Construir APK
+      - run:
+          name: Build Android APK
+          command: |
+            echo "🔨 Iniciando build de Android..."
+            if [ -f "android/key.properties" ]; then
+              echo "🔐 Construyendo APK firmado..."
+              flutter build apk --release --target-platform android-arm64
+            else
+              echo "⚠️ Construyendo APK sin firmar..."
+              flutter build apk --release --target-platform android-arm64
+            fi
+            
+      # Construir AAB si está configurado
+      - run:
+          name: Build Android App Bundle (AAB)
+          command: |
+            if [ "$BUILD_AAB" = "true" ] && [ -f "android/key.properties" ]; then
+              echo "📦 Construyendo AAB..."
+              flutter build appbundle --release --target-platform android-arm64
+            else
+              echo "⏭️ Saltando construcción de AAB"
+            fi
+            
+      # Guardar cache
+      - save_cache:
+          key: gradle-v2-{{ checksum "android/build.gradle" }}-{{ checksum "android/app/build.gradle" }}
+          paths:
+            - ~/.gradle
+            - android/.gradle
+            
+      # Guardar artefactos
+      - store_artifacts:
+          path: build/app/outputs/flutter-apk/app-release.apk
+          destination: app-release.apk
+          
+      - store_artifacts:
+          path: build/app/outputs/bundle/release/app-release.aab
+          destination: app-release.aab
+          
+      # Enviar keystore al cliente si se generó uno nuevo
+      - run:
+          name: Store Client Keystore
+          command: |
+            if [ -f "android/app/upload-keystore.jks" ] && [ "$PROVIDE_KEYSTORE" = "true" ]; then
+              echo "📦 Preparando keystore del cliente..."
+              cp android/app/upload-keystore.jks client-keystore.jks
+              cp android/key.properties client-key.properties
+            fi
+            
+      - store_artifacts:
+          path: client-keystore.jks
+          destination: client-keystore.jks
+          
+      - store_artifacts:
+          path: client-key.properties
+          destination: client-key.properties
+
+  build_ios:
+    macos:
+      xcode: 15.2.0
+    resource_class: macos.m1.medium
+    steps:
+      - checkout
+      
+      # Instalar Flutter
+      - flutter/install_sdk:
+          version: 3.29.2
+      - flutter/install_ios_pod
+      
+      # Configurar certificados iOS si están disponibles
+      - run:
+          name: Setup iOS Signing
+          command: |
+            if [ -n "$IOS_CERTIFICATE_BASE64" ] && [ -n "$IOS_PROFILE_BASE64" ]; then
+              echo "🔐 Configurando firma iOS..."
+              
+              # Decodificar certificado P12
+              echo $IOS_CERTIFICATE_BASE64 | base64 -d > ios/certificate.p12
+              
+              # Decodificar provisioning profile
+              echo $IOS_PROFILE_BASE64 | base64 -d > ios/profile.mobileprovision
+              
+              # Instalar certificado en keychain
+              security create-keychain -p "" build.keychain
+              security default-keychain -s build.keychain
+              security unlock-keychain -p "" build.keychain
+              security import ios/certificate.p12 -k build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+              security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
+              
+              # Instalar provisioning profile
+              mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+              cp ios/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+              
+              echo "✅ Certificados iOS configurados"
+            else
+              echo "⚠️ No se encontraron certificados iOS - compilación sin firma"
+            fi
+            
+      # Obtener dependencias
+      - run:
+          name: Get Dependencies
+          command: flutter pub get
+          
+      # Construir iOS
+      - run:
+          name: Build iOS
+          command: |
+            if [ -f "ios/certificate.p12" ]; then
+              echo "🔐 Construyendo IPA firmado..."
+              flutter build ios --release
+              
+              # Crear IPA
+              mkdir -p Payload
+              cp -r build/ios/iphoneos/Runner.app Payload/
+              zip -r app-release.ipa Payload/
+            else
+              echo "⚠️ Construyendo sin firma..."
+              flutter build ios --release --no-codesign
+            fi
+            
+      # Guardar artefactos
+      - store_artifacts:
+          path: build/ios/iphoneos
+          destination: ios-build
+          
+      - store_artifacts:
+          path: app-release.ipa
+          destination: app-release.ipa
+
+workflows:
+  build_and_test:
+    jobs:
+      - build_android:
+          context: android-signing
+      - build_ios:
+          context: ios-signing 

@@ -1,0 +1,61 @@
+# Flutter
+build/
+.dart_tool/
+.packages
+pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Android
+android/key.properties
+android/app/upload-keystore.jks
+android/.gradle
+android/captures/
+android/gradlew
+android/gradlew.bat
+android/local.properties
+android/app/google-services.json
+
+# iOS
+ios/certificate.p12
+ios/profile.mobileprovision
+ios/Runner.xcworkspace/xcuserdata/
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/flutter_export_environment.sh
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Miscellaneous
+*.class
+*.lock
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+.Python
+
+# macOS
+.DS_Store
+
+# Generated files
+*.iml
+*.hprof
+
+# Test results
+coverage/
+test_results/
+
+# Signing files
+*.jks
+*.p12
+*.mobileprovision
+key.properties 
